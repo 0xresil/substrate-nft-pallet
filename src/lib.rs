@@ -7,7 +7,7 @@ pub use pallet::*;
 
 pub mod nft;
 use sp_runtime::traits::{StaticLookup};
-
+use sp_std::convert::TryInto;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -48,7 +48,18 @@ pub mod pallet {
 	
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
-	pub enum Event<T: Config> {}
+	pub enum Event<T: Config> {
+    /// A new NFT was minted.
+		NFTMinted {
+			nft_id: crate::nft::NFTId,
+			owner: T::AccountId,
+			offchain_data: crate::nft::U8BoundedVec<T::NFTOffchainDataLimit>,
+		},
+		/// An NFT was burned.
+		NFTBurned { nft_id: crate::nft::NFTId },
+		/// An NFT was transferred to someone else.
+		NFTTransferred { nft_id: crate::nft::NFTId, sender: T::AccountId, recipient: T::AccountId },
+  }
 
 	// Errors inform users that something went wrong.
 	#[pallet::error]
@@ -75,11 +86,38 @@ pub mod pallet {
 			origin: OriginFor<T>,
 			offchain_data: crate::nft::U8BoundedVec<T::NFTOffchainDataLimit>,
 		) -> DispatchResultWithPostInfo {
+      let who = ensure_signed(origin)?;
+			let mut next_nft_id = None;
+
+			let nft_id = next_nft_id.unwrap_or_else(|| Self::get_next_nft_id());
+			let nft = crate::nft::NFTData::new_default(
+				who.clone(),
+				offchain_data.clone(),
+			);
+
+			// Execute
+			Nfts::<T>::insert(nft_id, nft);
+			let event = Event::NFTMinted {
+				nft_id,
+				owner: who,
+				offchain_data,
+			};
+			Self::deposit_event(event);
+
 			Ok(().into())
 		}
 
 		#[pallet::weight(Weight::from_ref_time(10_000) + T::DbWeight::get().writes(1))]
 		pub fn burn(origin: OriginFor<T>, nft_id: crate::nft::NFTId) -> DispatchResultWithPostInfo {
+      let who = ensure_signed(origin)?;
+			let nft = Nfts::<T>::get(nft_id).ok_or(Error::<T>::NFTNotFound)?;
+
+			// Checks
+			ensure!(nft.owner == who, Error::<T>::NotTheNFTOwner);
+			// Execute
+			Nfts::<T>::remove(nft_id);
+			Self::deposit_event(Event::NFTBurned { nft_id });
+
 			Ok(().into())
 		}
 
@@ -89,6 +127,24 @@ pub mod pallet {
 			nft_id: crate::nft::NFTId,
 			recipient: <T::Lookup as StaticLookup>::Source,
 		) -> DispatchResultWithPostInfo {
+      let who = ensure_signed(origin)?;
+			let recipient = T::Lookup::lookup(recipient)?;
+
+			Nfts::<T>::try_mutate(nft_id, |x| -> DispatchResult {
+				let nft = x.as_mut().ok_or(Error::<T>::NFTNotFound)?;
+
+				// Checks
+				ensure!(nft.owner == who, Error::<T>::NotTheNFTOwner);
+				ensure!(nft.owner != recipient, Error::<T>::CannotTransferNFTsToYourself);
+				// Execute
+				nft.owner = recipient.clone();
+
+				Ok(().into())
+			})?;
+			// Execute
+			let event = Event::NFTTransferred { nft_id, sender: who, recipient };
+			Self::deposit_event(event);
+
 			Ok(().into())
 		}
 
