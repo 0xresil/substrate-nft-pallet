@@ -2,102 +2,137 @@
 
 /// Edit this file to define custom logic or remove it if it is not needed.
 /// Learn more about FRAME and the core library of Substrate FRAME pallets:
-/// https://substrate.dev/docs/en/knowledgebase/runtime/frame
+/// <https://docs.substrate.io/v3/runtime/frame>
+pub use pallet::*;
 
-use frame_support::{decl_module, decl_storage, decl_event, decl_error, dispatch, traits::Get};
-use frame_system::ensure_signed;
+pub mod nft;
+use sp_runtime::traits::{StaticLookup};
 
-#[cfg(test)]
-mod mock;
 
-#[cfg(test)]
-mod tests;
+#[frame_support::pallet]
+pub mod pallet {
+	use super::*;
+	use frame_support::{dispatch::DispatchResultWithPostInfo, pallet_prelude::*};
+	use frame_system::pallet_prelude::*;
 
-/// Configure the pallet by specifying the parameters and types on which it depends.
-pub trait Config: frame_system::Config {
-	/// Because this pallet emits events, it depends on the runtime's definition of an event.
-	type Event: From<Event<Self>> + Into<<Self as frame_system::Config>::Event>;
-}
+	#[pallet::config]
+	pub trait Config: frame_system::Config {
+		/// Because this pallet emits events, it depends on the runtime's definition of an event.
+		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
-// The pallet's runtime storage items.
-// https://substrate.dev/docs/en/knowledgebase/runtime/storage
-decl_storage! {
-	// A unique name is used to ensure that the pallet's storage items are isolated.
-	// This name may be updated, but each pallet in the runtime must use a unique name.
-	// ---------------------------------vvvvvvvvvvvvvv
-	trait Store for Module<T: Config> as TemplateModule {
-		// Learn more about declaring storage items:
-		// https://substrate.dev/docs/en/knowledgebase/runtime/storage#declaring-storage-items
-		Something get(fn something): Option<u32>;
+		/// Maximum offchain data length.
+		#[pallet::constant]
+		type NFTOffchainDataLimit: Get<u32>;
 	}
-}
 
-// Pallets use events to inform users when important changes are made.
-// https://substrate.dev/docs/en/knowledgebase/runtime/events
-decl_event!(
-	pub enum Event<T> where AccountId = <T as frame_system::Config>::AccountId {
-		/// Event documentation should end with an array that provides descriptive names for event
-		/// parameters. [something, who]
-		SomethingStored(u32, AccountId),
+	#[pallet::pallet]
+	#[pallet::generate_store(pub(super) trait Store)]
+	pub struct Pallet<T>(_);
+
+	/// Counter for NFT ids.
+	#[pallet::storage]
+	#[pallet::getter(fn next_nft_id)]
+	pub type NextNFTId<T: Config> = StorageValue<_, crate::nft::NFTId, ValueQuery>;
+
+	/// Data related to NFTs.
+	#[pallet::storage]
+	#[pallet::getter(fn nfts)]
+	pub type Nfts<T: Config> = StorageMap<
+		_,
+		Blake2_128Concat,
+		crate::nft::NFTId,
+		crate::nft::NFTData<T::AccountId, T::NFTOffchainDataLimit>,
+		OptionQuery,
+	>;
+
+	
+	#[pallet::event]
+	#[pallet::generate_deposit(pub(super) fn deposit_event)]
+	pub enum Event<T: Config> {}
+
+	// Errors inform users that something went wrong.
+	#[pallet::error]
+	pub enum Error<T> {
+		/// No NFT was found with that NFT id.
+		NFTNotFound,
+		/// This function can only be called by the owner of the NFT.
+		NotTheNFTOwner,
+		/// Operation is not allowed because the NFT is owned by the caller.
+		CannotTransferNFTsToYourself,
 	}
-);
 
-// Errors inform users that something went wrong.
-decl_error! {
-	pub enum Error for Module<T: Config> {
-		/// Error names should be descriptive.
-		NoneValue,
-		/// Errors should have helpful documentation associated with them.
-		StorageOverflow,
-	}
-}
+	#[pallet::hooks]
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
 
-// Dispatchable functions allows users to interact with the pallet and invoke state changes.
-// These functions materialize as "extrinsics", which are often compared to transactions.
-// Dispatchable functions must be annotated with a weight and must return a DispatchResult.
-decl_module! {
-	pub struct Module<T: Config> for enum Call where origin: T::Origin {
-		// Errors must be initialized if they are used by the pallet.
-		type Error = Error<T>;
+	#[pallet::call]
+	impl<T: Config> Pallet<T> {
 
-		// Events must be initialized if they are used by the pallet.
-		fn deposit_event() = default;
-
-		/// An example dispatchable that takes a singles value as a parameter, writes the value to
-		/// storage and emits an event. This function must be dispatched by a signed extrinsic.
-		#[weight = 10_000 + T::DbWeight::get().writes(1)]
-		pub fn do_something(origin, something: u32) -> dispatch::DispatchResult {
-			// Check that the extrinsic was signed and get the signer.
-			// This function will return an error if the extrinsic is not signed.
-			// https://substrate.dev/docs/en/knowledgebase/runtime/origin
-			let who = ensure_signed(origin)?;
-
-			// Update storage.
-			Something::put(something);
-
-			// Emit an event.
-			Self::deposit_event(RawEvent::SomethingStored(something, who));
-			// Return a successful DispatchResult
-			Ok(())
+		/// Mint a new NFT with the provided details. An ID will be auto
+		/// generated and logged as an event, The caller of this function
+		/// will become the owner of the new NFT.
+		#[pallet::weight(Weight::from_ref_time(10_000) + T::DbWeight::get().writes(1))]
+		pub fn mint(
+			origin: OriginFor<T>,
+			offchain_data: crate::nft::U8BoundedVec<T::NFTOffchainDataLimit>,
+		) -> DispatchResultWithPostInfo {
+			Ok(().into())
 		}
 
-		/// An example dispatchable that may throw a custom error.
-		#[weight = 10_000 + T::DbWeight::get().reads_writes(1,1)]
-		pub fn cause_error(origin) -> dispatch::DispatchResult {
-			let _who = ensure_signed(origin)?;
+		#[pallet::weight(Weight::from_ref_time(10_000) + T::DbWeight::get().writes(1))]
+		pub fn burn(origin: OriginFor<T>, nft_id: crate::nft::NFTId) -> DispatchResultWithPostInfo {
+			Ok(().into())
+		}
 
-			// Read a value from storage.
-			match Something::get() {
-				// Return an error if the value has not been set.
-				None => Err(Error::<T>::NoneValue)?,
-				Some(old) => {
-					// Increment the value read from storage; will error in the event of overflow.
-					let new = old.checked_add(1).ok_or(Error::<T>::StorageOverflow)?;
-					// Update the value in storage with the incremented result.
-					Something::put(new);
-					Ok(())
-				},
-			}
+		#[pallet::weight(Weight::from_ref_time(10_000) + T::DbWeight::get().writes(1))]
+		pub fn transfer(
+			origin: OriginFor<T>,
+			nft_id: crate::nft::NFTId,
+			recipient: <T::Lookup as StaticLookup>::Source,
+		) -> DispatchResultWithPostInfo {
+			Ok(().into())
+		}
+
+    #[pallet::weight(Weight::from_ref_time(10_000) + T::DbWeight::get().writes(1))]
+		pub fn approve(
+			origin: OriginFor<T>,
+			nft_id: crate::nft::NFTId,
+			delegate: <T::Lookup as StaticLookup>::Source,
+		) -> DispatchResultWithPostInfo {
+			Ok(().into())
+		}
+
+    #[pallet::weight(Weight::from_ref_time(10_000) + T::DbWeight::get().writes(1))]
+		pub fn create_collection(
+			origin: OriginFor<T>,
+		) -> DispatchResultWithPostInfo {
+			Ok(().into())
+		}
+
+    #[pallet::weight(Weight::from_ref_time(10_000) + T::DbWeight::get().writes(1))]
+		pub fn freeze(
+			origin: OriginFor<T>,
+			nft_id: crate::nft::NFTId
+		) -> DispatchResultWithPostInfo {
+			Ok(().into())
+		}
+
+    #[pallet::weight(Weight::from_ref_time(10_000) + T::DbWeight::get().writes(1))]
+		pub fn thaw(
+			origin: OriginFor<T>,
+			nft_id: crate::nft::NFTId
+		) -> DispatchResultWithPostInfo {
+			Ok(().into())
+		}
+	}
+
+	impl<T: Config> Pallet<T> {
+		fn get_next_nft_id() -> crate::nft::NFTId {
+			let nft_id = NextNFTId::<T>::get();
+			let next_id = nft_id
+				.checked_add(1)
+				.expect("If u32 is not enough we should crash for safety; qed.");
+			NextNFTId::<T>::put(next_id);	
+			nft_id
 		}
 	}
 }
